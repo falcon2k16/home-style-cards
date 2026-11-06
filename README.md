@@ -111,6 +111,7 @@ entity: media_player.speaker_one
 name: Volume
 margin: -9px 0 5px              # to tuck it under a Now playing row
 divider: true                   # hairline above
+name_width: 88                  # px; stacked rows get sliders of the same length, long names end in "…"
 member_of: media_player.speaker_one   # only while grouped with that player
 coordinator_only: true
 ```

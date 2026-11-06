@@ -12,7 +12,7 @@
 //
 // Cards: home-style-group, home-style-volume, home-style-heading, home-style-pills, home-style-now-playing.
 
-const VERSION = "0.1.0";
+const VERSION = "0.1.1";
 console.info(`%c HOME-STYLE-CARDS %c ${VERSION} `, "color: #fff; background: #007aff; font-weight: 600",
   "color: #007aff; background: #fff");
 
@@ -190,6 +190,7 @@ class HomeStyleGroup extends HomeStyleBase {
 // { type: custom:home-style-volume, entity, name: "Volume",
 //   margin: "-14px 0 3px"            (default: tucked under a large player; under a small one -9px 0 5px),
 //   divider: true                    (hairline above, 16 px in on both sides),
+//   name_width: 88                   (px; a fixed name column so stacked rows' sliders line up, long names end in "…"),
 //   member_of: media_player.x        (only while grouped with that player),
 //   coordinator_only: true           (hidden while the speaker follows another group),
 //   rename: { when: {entity, state}, then: "Other name" } }
@@ -201,7 +202,7 @@ class HomeStyleVolume extends HomeStyleBase {
             font-size: 13px; color: var(--secondary-text-color); }
     .root.divider::before { content: ""; position: absolute; top: 0; left: 16px; right: 16px;
             border-top: 0.5px solid var(--home-style-separator, rgba(60, 60, 67, 0.18)); }
-    .name { flex: 0 0 auto; }
+    .name { flex: 0 0 var(--name-width, auto); min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
     ha-control-slider { flex: 1 1 auto; height: 8px; --control-slider-thickness: 8px; --control-slider-border-radius: 4px;
       --control-slider-color: var(--state-media_player-active-color, #8e8e93);
       --control-slider-background: var(--state-media_player-active-color, #8e8e93);
@@ -223,6 +224,8 @@ class HomeStyleVolume extends HomeStyleBase {
     }
     this.style.margin = c.margin ?? "-14px 0 3px";
     this.$.classList.toggle("divider", !!c.divider);
+    if (c.name_width != null) this.$.style.setProperty("--name-width", typeof c.name_width === "number" ? `${c.name_width}px` : c.name_width);
+    else this.$.style.removeProperty("--name-width");
   }
 
   _render() {
