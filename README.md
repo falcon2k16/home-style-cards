@@ -37,6 +37,8 @@ type: custom:home-style-group
 dividers: { left: 64, right: 0 }   # hairline insets in px; omit for no hairlines
 no_divider: [2]                    # rows (0-based) that never get a hairline above them
 surface: false                     # optional: no card surface, rows only
+sort: state                        # optional: rows by their entity's number, lowest first (state_desc: highest);
+                                   # rows without a number go last; re-sorts as the values change
 cards:
   - type: tile
     entity: cover.example_door
@@ -98,7 +100,9 @@ coordinator_only: true          # hide while this speaker follows another speake
 with:                           # adds "· with Speaker two, Speaker three" when grouped
   names: { media_player.speaker_two: Speaker two, media_player.speaker_three: Speaker three }
 idle: { name: Nothing playing } # one row for playing and idle
-tap_action: { action: more-info }
+tap_action: { action: more-info }   # default
+hold_action: { action: more-info }  # long press (500 ms)
+double_tap_action: { action: none }
 ```
 
 ### home-style-volume
@@ -114,6 +118,7 @@ divider: true                   # hairline above
 name_width: 88                  # px; stacked rows get sliders of the same length, long names end in "…"
 member_of: media_player.speaker_one   # only while grouped with that player
 coordinator_only: true
+tap_guard: true                 # under a row that opens something on tap: taps just beside the slider do nothing
 ```
 
 ### Conditions
@@ -123,7 +128,8 @@ coordinator_only: true
 ## Tap actions
 
 `navigate` (a `#hash` opens a Bubble Card pop-up), `perform-action`, `toggle`, `more-info` and `none`,
-with an optional `confirmation`.
+with an optional `confirmation`. `home-style-now-playing` also takes `hold_action` (long press) and
+`double_tap_action`; a moving finger (a scroll) never counts as a tap, and the play buttons keep their own taps.
 
 ## Compatibility
 

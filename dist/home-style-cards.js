@@ -12,7 +12,7 @@
 //
 // Cards: home-style-group, home-style-volume, home-style-heading, home-style-pills, home-style-now-playing.
 
-const VERSION = "0.1.1";
+const VERSION = "0.2.0";
 console.info(`%c HOME-STYLE-CARDS %c ${VERSION} `, "color: #fff; background: #007aff; font-weight: 600",
   "color: #007aff; background: #fff");
 
@@ -48,6 +48,39 @@ function runAction(el, hass, action, entity) {
         { bubbles: true, composed: true, detail: { entityId: action.entity || entity } }));
       break;
   }
+}
+
+// Tap, long press (500 ms) and double tap on one element, like HA's own cards: tap_action, hold_action,
+// double_tap_action. A finger that moves (a scroll) cancels; taps on buttons inside are left to the buttons.
+// Double tap only waits for a second tap when a double_tap_action is set, so a plain tap stays instant.
+function bindActions(card, el, defaultTap = { action: "more-info" }) {
+  let timer = null, held = false, start = null, last = 0, single = null;
+  const cfg = () => card._config;
+  const run = (key, fallback) => runAction(card, card._hass, cfg()[key] ?? fallback, cfg().entity);
+  const onButton = (ev) => ev.composedPath().some((n) => n.tagName === "BUTTON" || n.tagName === "HA-CONTROL-SLIDER");
+  // No text selection or callout menu under a long press on iOS.
+  el.style.webkitTouchCallout = "none"; el.style.webkitUserSelect = "none"; el.style.userSelect = "none";
+  el.addEventListener("pointerdown", (ev) => {
+    if (onButton(ev)) return;
+    held = false; start = [ev.clientX, ev.clientY];
+    clearTimeout(timer);
+    if (cfg().hold_action) timer = setTimeout(() => { held = true; run("hold_action"); }, 500);
+  });
+  el.addEventListener("pointermove", (ev) => {
+    if (start && Math.hypot(ev.clientX - start[0], ev.clientY - start[1]) > 10) { clearTimeout(timer); start = null; }
+  });
+  el.addEventListener("pointercancel", () => { clearTimeout(timer); start = null; });
+  el.addEventListener("click", (ev) => {
+    clearTimeout(timer);
+    if (onButton(ev) || held || !start) { held = false; return; }
+    start = null;
+    if (!cfg().double_tap_action) { run("tap_action", defaultTap); return; }
+    const now = Date.now();
+    if (now - last < 250) { clearTimeout(single); last = 0; run("double_tap_action"); return; }
+    last = now;
+    single = setTimeout(() => run("tap_action", defaultTap), 250);
+  });
+  el.addEventListener("contextmenu", (ev) => { if (cfg().hold_action) ev.preventDefault(); });
 }
 
 // `when` conditions the cards understand: { entity, state } or { entity, attribute, includes: [...] }.
@@ -98,6 +131,8 @@ class HomeStyleBase extends HTMLElement {
 //   dividers: { left: 64, right: 0 },   hairline above every visible row after the first (inset px)
 //   no_divider: [2, 4],                 rows (0-based) that never get one (a volume line under its player)
 //   surface: false,                     no card surface, just the rows (inside a pop-up)
+//   sort: "state" | "state_desc",       order the rows by their entity's number (lowest first, or highest);
+//                                       rows without a number go last; re-sorts as values change
 //   stack_uix: {...} }                  legacy: render through a vertical-stack with these UIX styles
 class HomeStyleGroup extends HomeStyleBase {
   static css = `
@@ -118,6 +153,14 @@ class HomeStyleGroup extends HomeStyleBase {
     :host([plain]) { background: none; box-shadow: none; -webkit-backdrop-filter: none; backdrop-filter: none;
                      border-radius: 0; overflow: visible; }
     .item { position: relative; }
+    /* Sorted rows: every visible row draws its hairline and the list moves up under the clipped top edge,
+       because the "after the first row" rule follows the document order, not the sorted one. */
+    .root.sorted { display: flex; flex-direction: column; margin-top: -1px; }
+    .lines.sorted .item:not(.nodiv):not(.gone):not(:has(> hui-card[hidden]))::before {
+      content: ""; position: absolute; top: 0; left: var(--line-left); right: var(--line-right);
+      z-index: 1; pointer-events: none;
+      border-top: 0.5px solid var(--home-style-separator, rgba(60, 60, 67, 0.18));
+    }
     .item > hui-card { display: block; }
     /* A row is hidden when HA's wrapper is (visibility) or the card inside hides itself (a grouped speaker). */
     .item.gone, .item:has(> hui-card[hidden]) { display: none; }
@@ -144,6 +187,7 @@ class HomeStyleGroup extends HomeStyleBase {
     await customElements.whenDefined("hui-card");
     const root = this.$;
     root.classList.toggle("lines", !!c.dividers);
+    root.classList.toggle("sorted", !!c.sort);
     if (c.dividers) {
       root.style.setProperty("--line-left", `${c.dividers.left ?? 16}px`);
       root.style.setProperty("--line-right", `${c.dividers.right ?? 0}px`);
@@ -173,6 +217,13 @@ class HomeStyleGroup extends HomeStyleBase {
   }
 
   _render() {
+    const sort = this._config?.sort, dir = sort === "state_desc" ? -1 : 1;
+    (this._config?.cards || []).forEach((conf, i) => {
+      const item = this._cards?.[i]?.parentElement;
+      if (!sort || !item) return;
+      const v = parseFloat(this._hass.states[conf.entity]?.state);
+      item.style.order = isNaN(v) ? 99999 : Math.round(v * dir);
+    });
     for (const card of this._cards || []) {
       card.hass = this._hass;
       // Also catch a card that hid itself before it was attached (its event went nowhere).
@@ -193,7 +244,9 @@ class HomeStyleGroup extends HomeStyleBase {
 //   name_width: 88                   (px; a fixed name column so stacked rows' sliders line up, long names end in "…"),
 //   member_of: media_player.x        (only while grouped with that player),
 //   coordinator_only: true           (hidden while the speaker follows another group),
-//   rename: { when: {entity, state}, then: "Other name" } }
+//   rename: { when: {entity, state}, then: "Other name" },
+//   tap_guard: true                  (an empty band 14 px up and 8 px down behind the slider takes stray taps,
+//                                     for a line pulled up under a player row that opens something on tap) }
 class HomeStyleVolume extends HomeStyleBase {
   static css = `
     :host { display: block; }
@@ -208,6 +261,9 @@ class HomeStyleVolume extends HomeStyleBase {
       --control-slider-background: var(--state-media_player-active-color, #8e8e93);
       --control-slider-background-opacity: 0.2; }
     .pct { flex: 0 0 auto; min-width: 32px; text-align: right; }
+    :host([guard]) { position: relative; z-index: 1; }
+    :host([guard]) .root { z-index: 0; }
+    :host([guard]) .root::after { content: ""; position: absolute; left: 0; right: 0; top: -14px; bottom: -8px; z-index: -1; }
   `;
 
   _configured() {
@@ -223,6 +279,7 @@ class HomeStyleVolume extends HomeStyleBase {
       this._built = true;
     }
     this.style.margin = c.margin ?? "-14px 0 3px";
+    this.toggleAttribute("guard", !!c.tap_guard);
     this.$.classList.toggle("divider", !!c.divider);
     if (c.name_width != null) this.$.style.setProperty("--name-width", typeof c.name_width === "number" ? `${c.name_width}px` : c.name_width);
     else this.$.style.removeProperty("--name-width");
@@ -370,7 +427,7 @@ class HomeStyleNowPlaying extends HomeStyleBase {
       + (ctl.includes("play_pause") ? `<button class="main" style="--mdc-icon-size:${big}px;width:${wide}px"><ha-icon></ha-icon></button>` : "")
       + (ctl.includes("next") ? `<button class="next" style="--mdc-icon-size:${small}px;width:${narrow}px"><ha-icon icon="mdi:skip-next"></ha-icon></button>` : "")
       + `</div>`;
-    this.$.onclick = () => runAction(this, this._hass, c.tap_action ?? { action: "more-info" }, c.entity);
+    if (!this._bound) { bindActions(this, this.$); this._bound = true; }
     const call = (svc) => (ev) => { ev.stopPropagation(); this._hass.callService("media_player", svc, { entity_id: c.entity }); };
     this.$.querySelector(".main")?.addEventListener("click", call("media_play_pause"));
     this.$.querySelector(".next")?.addEventListener("click", call("media_next_track"));
