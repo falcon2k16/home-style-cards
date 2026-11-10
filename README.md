@@ -1,8 +1,8 @@
 # Home Style Cards
 
 Small Home Assistant dashboard cards for a calm, home-app look inspired by Apple's design: grouped inset
-lists, section headings, pill buttons, a Now playing row, a one-line volume control, a styled tile and a
-line of live text.
+lists, section headings, pill buttons and selectors, a Now playing row, a one-line volume control, a styled
+tile, a line of live text and a picture that follows a state.
 
 The same look can be built from native cards and UIX/card-mod styles, but those styles arrive 100 ms or
 more after the card renders, so every page load shows plain cards first. These cards carry their own
@@ -65,8 +65,8 @@ tap_action: { action: navigate, navigation_path: /dashboard-home/details }
 
 ### home-style-pills
 
-Labelled capsule buttons, bold on a grey fill; a pill whose `active` condition holds turns blue with
-white text and icon.
+Labelled capsule buttons and selectors, bold on a grey fill; a pill whose `active` condition holds fills
+with its colour (blue by default) and turns its text and icon white.
 
 ```yaml
 type: custom:home-style-pills
@@ -84,7 +84,33 @@ pills:
     rename: { when: { entity: binary_sensor.speaker_two_docked, state: "on" }, then: Speaker two (docked) }
 ```
 
-Other options: `font_size`, `icon_color`.
+A selector in one row: icon pills, the chosen one grows to show its name in its own colour, the others'
+icons are grey.
+
+```yaml
+type: custom:home-style-pills
+layout: row            # or scroll: one row you swipe, fading at the edges where there is more
+compact: true          # only the active pill shows its label; the others are icon pills
+icon_width: 44
+icon_color: "rgb(var(--rgb-disabled, 189, 189, 189))"   # icons of pills that are not active
+pills:
+  - label: Off
+    icon: mdi:power
+    active: "is('climate.living_room', 'off')"          # an expression (see below) or a condition
+    color: var(--red-color)                              # this pill's fill while active
+    tap_action: { action: perform-action, perform_action: climate.set_hvac_mode,
+                  target: { entity_id: climate.living_room }, data: { hvac_mode: "off" } }
+  - label: Heat
+    icon: mdi:fire
+    active: "is('climate.living_room', 'heat')"
+    color: var(--orange-color)
+    tap_action: { action: perform-action, perform_action: climate.set_hvac_mode,
+                  target: { entity_id: climate.living_room }, data: { hvac_mode: heat } }
+```
+
+Other options: `font_size`, `gap` (px between pills), `pill_padding`, `fill` and `ink` (an active pill's
+background and its text and icon colour); per pill `visible` (an expression), `space_before` (px) and
+`icon_color`.
 
 ### home-style-now-playing
 
@@ -160,6 +186,45 @@ type: custom:home-style-text
 content: "fixed(num('sensor.solar_energy_today', 0), 1) + ' kWh solar today'"
 style: subtitle           # grey, 4 px under the title (default); plain: the text colour
 entity: sensor.anything   # optional: `entity` and `self` in the expression
+```
+
+A caption under a picture (in a `home-style-group`), and a line with an icon that slides when it is too long:
+
+```yaml
+type: custom:home-style-text
+style: caption            # a bold title over a grey 13 px line, inset like a tile
+title: Front door
+content: "on('binary_sensor.front_door_person') ? 'Person now' : 'Motion · ' + when(since('binary_sensor.front_door_motion'))"
+tap_action: { action: more-info, entity: camera.front_door }
+```
+
+```yaml
+type: custom:home-style-text
+icon: "is('media_player.tv', 'off') ? 'mdi:television-off' : 'mdi:television'"
+content: "attr('media_player.tv', 'media_title') || 'TV'"
+marquee: true             # one line; when too long, the text slides to its end and back (the icon stays)
+margin_top: 0             # px from the card above (subtitle default -4)
+padding: 0 16px
+```
+
+### home-style-picture
+
+A picture that follows a state: a room photo that greys while the room is empty, or a person's round picture
+with a badge while they are home.
+
+```yaml
+type: custom:home-style-picture
+image: /local/living-room.jpg      # or entity: person.someone (its picture)
+dim: "is('input_select.living_room_presence', 'Empty')"   # greyed and darker while true
+grid_options: { columns: 12, rows: 3 }                     # fills the rows; or aspect: "16 / 9"
+```
+
+```yaml
+type: custom:home-style-picture
+entity: person.someone
+avatar: 44                         # round, this many px, at the card's right edge
+badge: { icon: mdi:home, color: var(--green-color), visible: "is(entity, 'home')" }
+tap_action: { action: navigate, navigation_path: /dashboard/people }
 ```
 
 ### Expressions

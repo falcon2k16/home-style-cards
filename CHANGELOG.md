@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.3.1 (2026-11-10)
+
+- `home-style-pills` as a selector: `active` can be an expression; `compact` (only the active pill shows its
+  label), `layout: scroll` (one swiped row that fades at its edges), `icon_width`, `gap`, `pill_padding`, `fill` and
+  `ink`; per pill `color`, `icon_color`, `visible` and `space_before`. An icon-only pill centres its icon.
+- `home-style-text`: `style: caption` with a `title`, an `icon` expression, `marquee`, `tap_action`, `padding` and
+  `margin_top`.
+- `home-style-picture`: an image or an entity's picture that dims on an expression, or a round avatar with a badge.
+
 ## 0.3.0 (2026-11-10)
 
 - `home-style-tile`: Home Assistant's tile card with the look built in (tabular digits, icon circles only on
