@@ -1,12 +1,17 @@
 # Home Style Cards
 
 Small Home Assistant dashboard cards for a calm, home-app look inspired by Apple's design: grouped inset
-lists, section headings, pill buttons, a Now playing row and a one-line volume control.
+lists, section headings, pill buttons, a Now playing row, a one-line volume control, a styled tile and a
+line of live text.
 
 The same look can be built from native cards and UIX/card-mod styles, but those styles arrive 100 ms or
 more after the card renders, so every page load shows plain cards first. These cards carry their own
 CSS and render in their final shape on the first frame. They are built from Home Assistant's own pieces
-(`hui-card`, `ha-control-slider`, `ha-icon`, `ha-state-icon`).
+(`hui-card`, `hui-tile-card`, `ha-control-slider`, `ha-icon`, `ha-state-icon`).
+
+Text that changes with states (a tile's second line, its colour, a bar) is worked out in the browser from short
+JavaScript expressions. Jinja templates in card styles are rendered by the server one by one and arrive late,
+most visibly when a phone app comes back from the background.
 
 They pair with the [Home Style theme](https://github.com/falcon2k16/home-style-theme), which sets the
 glass, colours and separators. Without it they fall back to Home Assistant's default card colours.
@@ -121,6 +126,56 @@ coordinator_only: true
 tap_guard: true                 # under a row that opens something on tap: taps just beside the slider do nothing
 ```
 
+### home-style-tile
+
+Home Assistant's own tile card (every tile option works) with the look built in: tabular digits, an icon circle
+only where tapping the icon switches something (a light that is on fills it, with a white symbol), and a light
+grey chevron on tiles that open a page. The second line, the colour, a bar and a check mark can come from
+expressions.
+
+```yaml
+type: custom:home-style-tile
+entity: sensor.phone_battery
+tap_action: { action: navigate, navigation_path: /dashboard-home/batteries }   # → chevron
+secondary: "isnum(entity) ? fixed(num(entity)) + '% · Bedroom' : '—'"   # replaces the state
+tint: "num(entity, 0) < 20 ? 'var(--red-color)' : null"                 # the tile colour; null keeps `color`
+bar: { value: "num(entity, 0)", color: "'var(--green-color)'", place: right }   # 0–100, null hides it
+marquee: true             # a second line too long for the row slides sideways instead of ending in "…"
+chevron: false            # (default: shown when the tap navigates and no bar or check mark sits there)
+icon_circle: false        # (default: only when the icon toggles or performs an action)
+check: "is(entity, 'on')" # a round mark on the right: blue with a tick, or an empty ring
+vars: { level: "fixed(num(entity, 0)) + '%'" }    # --hs-level on the card, for your own UIX rule
+flags: { low: "num(entity, 0) < 20" }             # an hs-low attribute while true: :host([hs-low]) ...
+```
+
+`bar.place: bottom` (the default) draws an 8 px bar across the row under the text; `right` an 80 × 6 px bar at the
+right end of a normal row.
+
+### home-style-text
+
+A line of text from an expression, for the grey line under a page title or any text that follows states.
+
+```yaml
+type: custom:home-style-text
+content: "fixed(num('sensor.solar_energy_today', 0), 1) + ' kWh solar today'"
+style: subtitle           # grey, 4 px under the title (default); plain: the text colour
+entity: sensor.anything   # optional: `entity` and `self` in the expression
+```
+
+### Expressions
+
+JavaScript, run whenever a state the expression read changes (and every 30 s when it uses the time). Helpers:
+
+| Helper | Gives |
+|---|---|
+| `state(id)`, `num(id, fallback)`, `isnum(id)`, `attr(id, name)`, `label(id)` | the state, as a number, whether it is one, an attribute, the translated state |
+| `is(id, ...states)`, `on(id)`, `has(id)` | state tests (`has`: not unknown or unavailable) |
+| `since(id)`, `time(x)`, `now()` | dates: the last change, from an ISO string or epoch seconds, now |
+| `fmt(t, "%a %H:%M")`, `hm(t)`, `when(t)` | strftime codes; "11:36"; "11:36" today, "Fri 09:47" this week, else "3 Nov" |
+| `fixed(x, digits)`, `clamp(x, lo, hi)`, `power(w)`, `cap(text)` | rounding; limits; "850 W" / "2.6 kW"; first letter capital |
+| `list(items)` | the non-empty, unique items joined with " · " |
+| `entity`, `self`, `user`, `hass` | the card's entity id and state object, the viewer's name, everything |
+
 ### Conditions
 
 `active` and `rename.when` take `{ entity, state }` or `{ entity, attribute, includes: [...] }`.
@@ -133,8 +188,9 @@ with an optional `confirmation`. `home-style-now-playing` also takes `hold_actio
 
 ## Compatibility
 
-The cards use Home Assistant frontend internals that are not a public API (`hui-card`,
-`ha-control-slider`, `ha-state-icon`). Check them after each Home Assistant release.
+The cards use Home Assistant frontend internals that are not a public API (`hui-card`, `hui-tile-card`
+and its `ha-tile-icon`/`ha-tile-info` parts, `window.loadCardHelpers`, `ha-control-slider`, `ha-state-icon`).
+Check them after each Home Assistant release.
 
 ## License
 

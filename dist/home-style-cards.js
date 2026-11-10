@@ -6,13 +6,15 @@
 // Install through the Home Assistant Marketplace (custom repository, type Dashboard); see README.md.
 // The cards read the Home Style theme's variables and fall back to Home Assistant's defaults without it.
 //
-// HA internals used (not public API; check after HA upgrades): hui-card (card wrapper with visibility),
+// HA internals used (not public API; check after HA upgrades): hui-card (card wrapper with visibility), hui-tile-card
+// (extended by home-style-tile), window.loadCardHelpers,
 // ha-control-slider (value-changed event, `pressed`), ha-icon, ha-state-icon, the hass-more-info and
 // location-changed events.
 //
-// Cards: home-style-group, home-style-volume, home-style-heading, home-style-pills, home-style-now-playing.
+// Cards: home-style-group, home-style-volume, home-style-heading, home-style-pills, home-style-now-playing,
+// home-style-tile, home-style-text.
 
-const VERSION = "0.2.0";
+const VERSION = "0.3.0";
 console.info(`%c HOME-STYLE-CARDS %c ${VERSION} `, "color: #fff; background: #007aff; font-weight: 600",
   "color: #007aff; background: #fff");
 
@@ -58,7 +60,7 @@ function bindActions(card, el, defaultTap = { action: "more-info" }) {
   const cfg = () => card._config;
   const run = (key, fallback) => runAction(card, card._hass, cfg()[key] ?? fallback, cfg().entity);
   const onButton = (ev) => ev.composedPath().some((n) => n.tagName === "BUTTON" || n.tagName === "HA-CONTROL-SLIDER");
-  // No text selection or callout menu under a long press on iOS.
+  // No text selection or callout menu under a long press on touch screens.
   el.style.webkitTouchCallout = "none"; el.style.webkitUserSelect = "none"; el.style.userSelect = "none";
   el.addEventListener("pointerdown", (ev) => {
     if (onButton(ev)) return;
@@ -465,14 +467,322 @@ class HomeStyleNowPlaying extends HomeStyleBase {
   }
 }
 
+// ---------------------------------------------------------------------------------------------- home-style-tile
+
+// HA's own tile card with the Home Style look built in, so the first frame is already right and nothing waits for
+// the server: tabular digits, an icon circle only where the icon switches something (a light that is on fills
+// it), a chevron on tiles that open a page, and a second line, colour, bar or check mark worked out in the
+// browser. Jinja in a UIX style is rendered by the server and lands late, worst when a phone app comes back from
+// the background; these expressions run on the states the browser already has.
+//
+// { type: custom:home-style-tile, ...every tile option,
+//   secondary: "expr",                 the second line, replacing the state (null shows the state again)
+//   tint: "expr",                      the tile colour from an expression (any CSS colour): symbol, filled circle,
+//                                      bar; the tile's own color option still works for a fixed colour
+//   bar: { value: "expr", color: "expr", place: "bottom" | "right" },
+//                                      0–100, null for no bar. bottom: an 8 px bar under the text across the
+//                                      row; right: an 80 × 6 px bar at the right end of a normal row
+//   check: "expr",                     a round mark on the right: blue with a tick when true, an empty ring when false
+//   chevron: false,                    (default: a chevron when the tap opens a page and the right end is free)
+//   marquee: true,                     a second line too long for the row slides sideways instead of ending in "…"
+//   icon_circle: true | false,         (default: a circle only when tapping the icon switches something)
+//   vars: { name: "expr" },            --hs-<name> on the card, for a one-off UIX rule
+//   flags: { name: "expr" } }          an hs-<name> attribute on the card while true, for a one-off UIX rule
+//
+// Expressions are JavaScript. They see:
+//   state(id)  num(id, fallback)  isnum(id)  attr(id, name)  is(id, ...states)  on(id)  has(id)  label(id)
+//   since(id) (last change, a Date)  time(x) (a Date from an ISO string or epoch seconds)  now()
+//   fmt(t, "%a %H:%M")  hm(t)  when(t) ("11:36" today, "Fri 09:47" this week, else "3 Nov")
+//   fixed(x, digits)  clamp(x, lo, hi)  power(watts) ("850 W" / "2.6 kW")  list(items) (non-empty, unique, " · ")
+//   cap(text) (first letter capital, the rest lower)
+//   entity (this tile's), self (its state object), user (the viewer's name), hass
+// A tile runs them again when an entity they read changes, and every 30 s when they use the time.
+//
+// HA internals used: the hui-tile-card class (extended), ha-tile-icon's --tile-icon-opacity, ha-tile-info's slots.
+
+const CONTROL_DOMAINS = ["light", "switch", "fan", "cover", "lock", "valve", "climate", "media_player", "input_boolean",
+  "humidifier", "vacuum", "lawn_mower", "water_heater", "siren", "button", "input_button", "script", "scene",
+  "automation", "remote"];
+const SWITCHING = ["toggle", "perform-action", "call-service"];
+const DAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+const MONTHS = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October",
+  "November", "December"];
+const pad = (n) => String(n).padStart(2, "0");
+const NAMES = ["state", "num", "isnum", "attr", "is", "on", "has", "label", "since", "time", "now", "fmt", "hm", "when",
+  "fixed", "clamp", "power", "list", "cap", "entity", "self", "user", "hass"];
+
+function toDate(x) {
+  if (x == null || x === "" || x === "unknown" || x === "unavailable") return null;
+  const d = x instanceof Date ? x : new Date(typeof x === "number" ? x * 1000 : x);
+  return isNaN(d) ? null : d;
+}
+
+// strftime for the codes a dashboard needs: %H %M %S %d %-d %m %-m %Y %a %A %b %B %%.
+function fmt(t, pattern) {
+  const d = toDate(t);
+  if (!d) return "";
+  const map = { H: pad(d.getHours()), M: pad(d.getMinutes()), S: pad(d.getSeconds()), d: pad(d.getDate()),
+    "-d": d.getDate(), m: pad(d.getMonth() + 1), "-m": d.getMonth() + 1, Y: d.getFullYear(),
+    a: DAYS[d.getDay()].slice(0, 3), A: DAYS[d.getDay()], b: MONTHS[d.getMonth()].slice(0, 3), B: MONTHS[d.getMonth()],
+    "%": "%" };
+  return pattern.replace(/%(-?[a-zA-Z%])/g, (m, k) => (k in map ? map[k] : m));
+}
+
+function when(t) {
+  const d = toDate(t);
+  if (!d) return "";
+  const day = (x) => new Date(x.getFullYear(), x.getMonth(), x.getDate());
+  const days = Math.round((day(new Date()) - day(d)) / 86400000);
+  return days === 0 ? fmt(d, "%H:%M") : days < 7 ? fmt(d, "%a %H:%M") : fmt(d, "%-d %b");
+}
+
+// The helpers for one run, in NAMES order. They record what the expression read, so the tile knows when to run
+// it again.
+function scope(card, hass, seen) {
+  const get = (id) => { seen.ids.add(id); return hass.states[id]; };
+  const state = (id) => get(id)?.state ?? "unknown";
+  return [
+    state,
+    (id, fallback = NaN) => { const v = parseFloat(state(id)); return isNaN(v) ? fallback : v; },
+    (id) => state(id) !== "" && !isNaN(Number(state(id))),
+    (id, name) => get(id)?.attributes?.[name] ?? null,
+    (id, ...states) => states.includes(state(id)),
+    (id) => state(id) === "on",
+    (id) => !!get(id) && !["unknown", "unavailable"].includes(state(id)),
+    (id) => { const st = get(id); return st ? hass.formatEntityState?.(st) ?? st.state : ""; },
+    (id) => toDate(get(id)?.last_changed),
+    toDate,
+    () => { seen.time = true; return new Date(); },
+    fmt,
+    (t) => fmt(t, "%H:%M"),
+    (t) => { seen.time = true; return when(t); },
+    (x, digits = 0) => Number(x).toFixed(digits),
+    (x, lo = 0, hi = 100) => Math.min(Math.max(Number(x) || 0, lo), hi),
+    (w) => (Math.abs(w) >= 1000 ? `${(w / 1000).toFixed(1)} kW` : `${Math.round(w)} W`),
+    (items) => [...new Set(items.filter((x) => x != null && x !== "" && x !== false))].join(" · "),
+    (text) => { const t = String(text ?? ""); return t.charAt(0).toUpperCase() + t.slice(1).toLowerCase(); },
+    card._config.entity,
+    get(card._config.entity),
+    hass.user?.name ?? "",
+    new Proxy(hass, { get: (o, k) => { seen.all = true; return o[k]; } }),
+  ];
+}
+
+// An expression as a function of the helpers; a broken one logs and yields null.
+function compileExpr(expr, who) {
+  if (expr == null) return null;
+  try { return new Function(...NAMES, `return (${expr});`); }
+  catch (err) { console.warn(`${who}: ${err.message} in ${expr}`); return () => null; }
+}
+
+// A CSS string for content: (quotes and backslashes escaped, line breaks as \A).
+const cssString = (s) => `"${String(s).replace(/\\/g, "\\\\").replace(/"/g, '\\"').replace(/\n/g, "\\A ")}"`;
+
+const TILE_CSS = `
+  ha-card { font-variant-numeric: tabular-nums; }
+  /* Icon circles only where the icon switches something; a light that is on fills its circle, white symbol. */
+  :host(:not([hs-circle])) ha-tile-icon { --tile-icon-opacity: 0; --tile-icon-hover-opacity: 0; }
+  :host([hs-fill]) ha-tile-icon { --tile-icon-opacity: 1; --tile-icon-hover-opacity: 1; }
+  :host([hs-fill]) ha-tile-icon ha-state-icon { color: #fff; }
+  :host([hs-color]) ha-card { --tile-color: var(--hs-color) !important; }
+  :host([hs-chevron]) ha-card, :host([hs-bar]) ha-card, :host([hs-check]) ha-card { position: relative; }
+  /* A tile that opens a page: a light grey chevron on the right, as in settings lists. */
+  :host([hs-chevron]) ha-tile-info { padding-right: 18px; }
+  :host([hs-chevron]) ha-card::after {
+    content: ""; position: absolute; right: 20px; top: 28px; width: 7px; height: 7px; margin-top: -5px;
+    border-top: 2px solid var(--secondary-text-color); border-right: 2px solid var(--secondary-text-color);
+    transform: rotate(45deg); opacity: 0.45; pointer-events: none;
+  }
+  /* The second line from the expression; the tile's own state stays hidden. */
+  :host([hs-secondary]) ha-tile-info span[slot=secondary] state-display { display: none; }
+  :host([hs-secondary]) ha-tile-info span[slot=secondary]::after { content: var(--hs-secondary); }
+  /* Marquee: ha-tile-info is the size container (Safari resolves the ::after's cqw against the viewport when the
+     span is). Waits 3 s, slides until the end shows, waits, slides back; a line that fits stays still. */
+  :host([hs-marquee]) ha-tile-info { container-type: inline-size; }
+  :host([hs-marquee]) ha-tile-info span[slot=secondary] { display: block; overflow: hidden; }
+  :host([hs-marquee]) ha-tile-info span[slot=secondary]::after {
+    display: inline-block; white-space: nowrap; animation: hs-marquee 14s ease-in-out 3s infinite;
+  }
+  @keyframes hs-marquee { 0%, 20% { transform: translateX(0); }
+    60%, 85% { transform: translateX(min(0px, calc(100cqw - 100%))); } 100% { transform: translateX(0); } }
+  @media (prefers-reduced-motion: reduce) {
+    :host([hs-marquee]) ha-tile-info span[slot=secondary]::after { animation: none; }
+  }
+  /* Bars: filled to --hs-bar in --hs-bar-color (else the tile colour) on the grey fill. */
+  :host([hs-bar]) ha-card::after {
+    content: ""; position: absolute; pointer-events: none;
+    background: linear-gradient(to right, var(--hs-bar-color, var(--tile-color)) var(--hs-bar, 0%),
+                var(--home-style-fill, rgba(120, 120, 128, 0.24)) 0);
+  }
+  :host([hs-bar=bottom]) ha-card { padding-bottom: 20px !important; }
+  :host([hs-bar=bottom]) ha-card::after { left: 16px; right: 16px; bottom: 14px; height: 8px; border-radius: 4px; }
+  :host([hs-bar=right]) ha-tile-info { padding-right: 96px; }
+  :host([hs-bar=right]) ha-card::after { right: 16px; top: 50%; width: 80px; height: 6px; margin-top: -3px; border-radius: 3px; }
+  /* Pick lists: an empty ring, or a blue disc with a white tick. */
+  :host([hs-check]) ha-card::after {
+    content: ""; position: absolute; right: 16px; top: 50%; width: 22px; height: 22px; margin-top: -11px;
+    border-radius: 50%; box-sizing: border-box; pointer-events: none;
+    border: 1.5px solid var(--secondary-text-color); opacity: 0.45;
+  }
+  :host([hs-check][hs-checked]) ha-card::after {
+    opacity: 1; border: none; background: var(--primary-color) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 22 22'%3E%3Cpath d='M6.5 11.5l3 3 6-6.5' fill='none' stroke='white' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") center / 22px no-repeat;
+  }
+`;
+
+function defineTile(Tile) {
+  const sheet = new CSSStyleSheet();
+  sheet.replaceSync(TILE_CSS);
+
+  class HomeStyleTile extends Tile {
+    static get styles() { return [...[super.styles].flat(), sheet]; }
+
+    setConfig(config) {
+      super.setConfig(config);
+      const c = config, domain = c.entity.split(".")[0];
+      const compile = (expr) => compileExpr(expr, `home-style-tile ${c.entity}`);
+      this._hs = {
+        secondary: compile(c.secondary), tint: compile(c.tint), check: compile(c.check),
+        bar: c.bar ? { value: compile(c.bar.value), color: compile(c.bar.color) } : null,
+        vars: Object.entries(c.vars || {}).map(([k, v]) => [k, compile(v)]),
+        flags: Object.entries(c.flags || {}).map(([k, v]) => [k, compile(v)]),
+        seen: null, states: null, read: null,
+      };
+      const opens = c.tap_action?.action === "navigate" && c.features_position !== "inline";
+      const circle = c.icon_circle ?? (CONTROL_DOMAINS.includes(domain)
+        && SWITCHING.includes(c.icon_tap_action?.action ?? "toggle"));
+      this.toggleAttribute("hs-circle", circle);
+      this.toggleAttribute("hs-chevron", (c.chevron ?? opens) && !c.bar && c.check == null);
+      this.toggleAttribute("hs-marquee", !!c.marquee);
+      this.toggleAttribute("hs-check", c.check != null);
+      this._hsBarPlace = c.bar ? (c.bar.place === "right" ? "right" : "bottom") : null;
+      if (!c.bar) this.removeAttribute("hs-bar");
+      this._hsLight = circle && domain === "light";
+      if (this.hass) this._hsRun(true);
+    }
+
+    willUpdate(changed) {
+      super.willUpdate?.(changed);
+      if (changed.has("hass") && this.hass) this._hsRun(false);
+    }
+
+    connectedCallback() {
+      super.connectedCallback();
+      if (this._hs?.seen?.time) this._hsTick();
+    }
+
+    disconnectedCallback() {
+      super.disconnectedCallback();
+      clearInterval(this._hsTimer);
+      this._hsTimer = null;
+    }
+
+    _hsTick() {
+      if (!this._hsTimer && this.isConnected) this._hsTimer = setInterval(() => this._hsRun(true), 30000);
+    }
+
+    _hsRun(force) {
+      const hs = this._hs, hass = this.hass;
+      if (!hs || !hass) return;
+      this.toggleAttribute("hs-fill", this._hsLight && hass.states[this._config.entity]?.state === "on");
+      // Run again only when a state an expression read has changed (HA replaces a state object on change).
+      if (!force && hs.seen && !hs.seen.all
+          && (hs.states === hass.states || [...hs.seen.ids].every((id) => hass.states[id] === hs.read[id]))) {
+        hs.states = hass.states;
+        return;
+      }
+      const seen = { ids: new Set(), time: false, all: false };
+      const args = scope(this, hass, seen);
+      const run = (fn) => {
+        if (!fn) return null;
+        try { return fn(...args); }
+        catch (err) { console.warn(`home-style-tile ${this._config.entity}: ${err.message}`); return null; }
+      };
+      const set = (name, value) => (value == null || value === "" ? this.style.removeProperty(name)
+                                                                    : this.style.setProperty(name, value));
+      const text = run(hs.secondary);
+      this.toggleAttribute("hs-secondary", text != null);
+      set("--hs-secondary", text == null ? null : cssString(text));
+      const color = run(hs.tint);
+      this.toggleAttribute("hs-color", !!color);
+      set("--hs-color", color || null);
+      if (hs.bar) {
+        const value = run(hs.bar.value);
+        if (value == null) this.removeAttribute("hs-bar");
+        else this.setAttribute("hs-bar", this._hsBarPlace);
+        set("--hs-bar", `${Math.round(Math.min(Math.max(Number(value) || 0, 0), 100))}%`);
+        set("--hs-bar-color", run(hs.bar.color));
+      }
+      if (hs.check) this.toggleAttribute("hs-checked", !!run(hs.check));
+      for (const [k, fn] of hs.vars) set(`--hs-${k}`, run(fn));
+      for (const [k, fn] of hs.flags) this.toggleAttribute(`hs-${k}`, !!run(fn));
+      hs.seen = seen;
+      hs.states = hass.states;
+      hs.read = Object.fromEntries([...seen.ids].map((id) => [id, hass.states[id]]));
+      if (seen.time) this._hsTick();
+    }
+  }
+  customElements.define("home-style-tile", HomeStyleTile);
+}
+
+// HA loads its tile card on first use: make one so it loads, then extend it.
+(async () => {
+  if (!customElements.get("hui-tile-card")) {
+    (await window.loadCardHelpers?.())?.createCardElement({ type: "tile", entity: "sun.sun" });
+  }
+  defineTile(await customElements.whenDefined("hui-tile-card"));
+})();
+
+
+// ---------------------------------------------------------------------------------------------- home-style-text
+
+// A line of text worked out in the browser (the page subtitle under a large title, "Today 12.9 kWh used"), in
+// place of a markdown card whose template the server renders and sends late. Same expressions as home-style-tile.
+// { type: custom:home-style-text, content: "expr", entity: (optional, for `entity` and `self`),
+//   style: "subtitle" (grey 15/20 px, 4 px under the title; the default) | "plain" (the text colour) }
+class HomeStyleText extends HomeStyleBase {
+  static css = `
+    :host { display: block; }
+    .root { padding: 0 4px; font-size: 15px; line-height: 20px; white-space: pre-line;
+            font-variant-numeric: tabular-nums; color: var(--primary-text-color); }
+    .root.subtitle { margin-top: -4px; color: var(--secondary-text-color); }
+  `;
+
+  _configured() {
+    this._fn = compileExpr(this._config.content, "home-style-text");
+    this.$.className = `root ${this._config.style === "plain" ? "plain" : "subtitle"}`;
+    this._read = null;
+  }
+
+  _render() {
+    const hass = this._hass;
+    // Again only when a state it read has changed (or every 30 s when it uses the time).
+    if (this._read && !this._read.all && !this._read.force
+        && [...this._read.ids].every((id) => hass.states[id] === this._read.states[id])) return;
+    const seen = { ids: new Set(), time: false, all: false };
+    let text = null;
+    try { text = this._fn?.(...scope(this, hass, seen)); }
+    catch (err) { console.warn(`home-style-text: ${err.message}`); }
+    this.$.textContent = text ?? "";
+    this._read = { ...seen, states: Object.fromEntries([...seen.ids].map((id) => [id, hass.states[id]])) };
+    if (seen.time && !this._timer) {
+      this._timer = setInterval(() => { if (this._read) this._read.force = true; this._render(); }, 30000);
+    }
+  }
+
+  disconnectedCallback() { clearInterval(this._timer); this._timer = null; }
+
+  getGridOptions() { return { columns: "full", rows: "auto" }; }
+}
+
 customElements.define("home-style-group", HomeStyleGroup);
 customElements.define("home-style-volume", HomeStyleVolume);
 customElements.define("home-style-heading", HomeStyleHeading);
 customElements.define("home-style-pills", HomeStylePills);
 customElements.define("home-style-now-playing", HomeStyleNowPlaying);
+customElements.define("home-style-text", HomeStyleText);
 
 window.customCards = window.customCards || [];
-for (const part of ["group", "volume", "heading", "pills", "now-playing"]) {
+for (const part of ["group", "volume", "heading", "pills", "now-playing", "tile", "text"]) {
   window.customCards.push({ type: `home-style-${part}`, name: `Home Style ${part.replace("-", " ")}`,
                             description: "Home Style dashboard card" });
 }
