@@ -138,7 +138,7 @@ double_tap_action: { action: none }
 
 ### home-style-volume
 
-A one-line volume control: name, Home Assistant's slider, percentage.
+A one-line volume control: name, Home Assistant's slider, percentage. The thin line takes touches in a 32 px band.
 
 ```yaml
 type: custom:home-style-volume

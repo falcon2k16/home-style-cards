@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.3.2 (2026-11-11)
+
+- `home-style-volume`: the thin line takes touches in a 32 px band (12 px above and below it), so the volume is
+  easier to grab. It looks the same. With `tap_guard`, the band moves the volume and the guard takes only the taps
+  beyond it.
+
 ## 0.3.1 (2026-11-10)
 
 - `home-style-pills` as a selector: `active` can be an expression; `compact` (only the active pill shows its

@@ -14,7 +14,7 @@
 // Cards: home-style-group, home-style-volume, home-style-heading, home-style-pills, home-style-now-playing,
 // home-style-tile, home-style-text, home-style-picture.
 
-const VERSION = "0.3.1";
+const VERSION = "0.3.2";
 console.info(`%c HOME-STYLE-CARDS %c ${VERSION} `, "color: #fff; background: #007aff; font-weight: 600",
   "color: #007aff; background: #fff");
 
@@ -249,6 +249,7 @@ class HomeStyleGroup extends HomeStyleBase {
 //   rename: { when: {entity, state}, then: "Other name" },
 //   tap_guard: true                  (an empty band 14 px up and 8 px down behind the slider takes stray taps,
 //                                     for a line pulled up under a player row that opens something on tap) }
+// The thin line takes touches in a 32 px band: transparent borders above and below the slider's track.
 class HomeStyleVolume extends HomeStyleBase {
   static css = `
     :host { display: block; }
@@ -258,7 +259,7 @@ class HomeStyleVolume extends HomeStyleBase {
     .root.divider::before { content: ""; position: absolute; top: 0; left: 16px; right: 16px;
             border-top: 0.5px solid var(--home-style-separator, rgba(60, 60, 67, 0.18)); }
     .name { flex: 0 0 var(--name-width, auto); min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
-    ha-control-slider { flex: 1 1 auto; height: 8px; --control-slider-thickness: 8px; --control-slider-border-radius: 4px;
+    ha-control-slider { flex: 1 1 auto; height: 32px; --control-slider-thickness: 8px; --control-slider-border-radius: 4px;
       --control-slider-color: var(--state-media_player-active-color, #8e8e93);
       --control-slider-background: var(--state-media_player-active-color, #8e8e93);
       --control-slider-background-opacity: 0.2; }
@@ -274,7 +275,16 @@ class HomeStyleVolume extends HomeStyleBase {
     if (!this._built) {
       this.$.innerHTML = `<span class="name"></span><ha-control-slider min="0" max="100" step="1" mode="start" show-handle>`
         + `</ha-control-slider><span class="pct"></span>`;
-      this.$.querySelector("ha-control-slider").addEventListener("value-changed", (ev) => {
+      const slider = this.$.querySelector("ha-control-slider");
+      // The touch band: the slider takes touches on its .slider element, so transparent 12 px borders widen it
+      // while the track (drawn in the padding box) stays 8 px. The radius keeps 4 px corners on the track.
+      customElements.whenDefined("ha-control-slider").then(() => slider.updateComplete).then(() => {
+        const sheet = new CSSStyleSheet();
+        sheet.replaceSync(".slider { box-sizing: border-box; border-top: 12px solid transparent; "
+          + "border-bottom: 12px solid transparent; border-radius: 4px / 16px !important; background-clip: padding-box; }");
+        slider.shadowRoot.adoptedStyleSheets = [...slider.shadowRoot.adoptedStyleSheets, sheet];
+      });
+      slider.addEventListener("value-changed", (ev) => {
         this._hass?.callService("media_player", "volume_set",
           { entity_id: this._config.entity, volume_level: ev.detail.value / 100 });
       });
